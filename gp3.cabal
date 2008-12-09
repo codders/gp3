@@ -1,0 +1,21 @@
+Name: gp3
+Version: 0.01
+Cabal-Version: >= 1.2
+Description: GP3.
+License: GPL
+License-File: LICENSE
+Copyright: (c) Arthur Taylor.
+Author: Arthur Taylor
+Maintainer: codders@octomonkey.org.uk
+Tested-With: GHC==6.8
+Data-Files: 
+Extra-Source-Files: src/gtk_docker.h
+
+Executable gp3
+    Main-is: GP3Main.hs
+    Hs-Source-Dirs: src
+    GHC-Options: -Wall
+    C-Sources: src/gtk_docker.c
+    Includes: src/gtk_docker.h
+    Build-Depends: base, glib, glade, gtk, filepath, unix
+
