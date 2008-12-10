@@ -1,10 +1,9 @@
 <?xml version="1.0" encoding="UTF-8" standalone="no"?>
 <!DOCTYPE glade-interface SYSTEM "glade-2.0.dtd">
-<!--Generated with glade3 3.4.5 on Tue Dec  9 15:01:14 2008 -->
+<!--Generated with glade3 3.4.5 on Wed Dec 10 13:16:03 2008 -->
 <glade-interface>
   <requires lib="bonobo"/>
   <requires lib="gnome"/>
-  <requires lib="canvas"/>
   <widget class="GnomeApp" id="MainApp">
     <child internal-child="dock">
       <widget class="BonoboDock" id="AppDock">
@@ -150,9 +149,10 @@
           </packing>
         </child>
         <child>
-          <widget class="GnomeCanvas" id="GameCanvas">
+          <widget class="GtkDrawingArea" id="GameCanvas">
+            <property name="width_request">320</property>
+            <property name="height_request">240</property>
             <property name="visible">True</property>
-            <property name="can_focus">True</property>
           </widget>
         </child>
       </widget>

@@ -16,6 +16,19 @@ data GUI = GUI {
     canvas :: DrawingArea
   }
 
+myDraw :: Render ()
+myDraw = 
+  do
+    setSourceRGB 1 1 0
+    setLineWidth 5
+  
+    moveTo 120 60
+    lineTo 60 110
+    lineTo 180 110
+    closePath
+    
+    stroke
+
 main :: FilePath -> IO ()
 main gladepath = 
   do
@@ -24,16 +37,17 @@ main gladepath =
     timeoutAddFull (yield >> return True) priorityDefaultIdle 100
     gui <- loadGlade gladepath
     connectGui gui
-    putStrLn "Gui Connected"
     windowPresent (mainApp gui)
-    putStrLn "Window presented"
     mainGUI
 
 loadGlade gladepath = 
   do
     Just xml <- xmlNew gladepath
     app <- xmlGetWidget xml castToWindow "MainApp"
-    --canvas <- xmlGetWidget xml castToDrawingArea "GameCanvas"
+    canvas <- xmlGetWidget xml castToDrawingArea "GameCanvas"
+    onExpose canvas (\x -> do drawWin <- widgetGetDrawWindow canvas
+                              renderWithDrawable drawWin myDraw
+                              return (eventSent x))
     return $ GUI app undefined
 
 connectGui gui = 
