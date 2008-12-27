@@ -1,3 +1,4 @@
+{-# LANGUAGE CPP #-}
 module BPackReader where
 
 import Text.ParserCombinators.Parsec
@@ -5,12 +6,19 @@ import qualified Data.ByteString.Lazy as L
 import qualified Data.ByteString.Lazy.Char8 as L8
 import qualified Data.ByteString.Internal as LI
 import qualified Data.Word as DW
+import Data.List
 import Data.Bits
 import qualified GHC.Word as W
 import Control.Exception (bracket, handle)
 import Control.Monad
 import System.IO
 import Text.Printf
+
+#define BITMAP_OFFSET_BYTES 54
+#define TILE_DIMENSION_BITS 16
+#define TILE_BITPLANE_BYTES (TILE_DIMENSION_BITS * TILE_DIMENSION_BITS `div` 8)
+#define BITPLANES 4
+#define TILE_DATA_BYTES (TILE_BITPLANE_BYTES * BITPLANES)
 
 data BPackedImage = BPI { 
                           bit8Marker :: W.Word8,
@@ -22,6 +30,10 @@ data BPackedImage = BPI {
 data UnpackedImage = UPI {
                            rawImageData :: L.ByteString
                          }
+
+data Gliph = GL {
+                  gliphData :: L.ByteString
+                } deriving (Show)
 
 data PaletteEntry = PE {
                          red :: Integer,
@@ -102,11 +114,13 @@ parseFile fileName = do
             case image of Just parsedImage -> putStrLn $ "Loaded image: " ++ (show parsedImage)
             return image
 
+-- Utility function for hexdumping
 asciiof :: W.Word8 -> String
 asciiof x = if (x > 20 && x < 127)
               then [(LI.w2c x)]
               else "."
 
+-- Generates the hex string corresponding to 16 bytes
 dumpLine :: L.ByteString -> IO ()
 dumpLine l = putStrLn $ dumpRest "" "" l
              where dumpRest hex ascii l = 
@@ -114,21 +128,26 @@ dumpLine l = putStrLn $ dumpRest "" "" l
                          Just (head, tail) -> dumpRest (hex ++ (printf "%02X " head)) (ascii ++ (asciiof head)) tail
                          Nothing -> hex ++ ascii
 
+-- Hexdumps the image data
 dumpImage :: L.ByteString -> Int -> IO()
 dumpImage imagedata off = do putStr $ printf "%08X " off
                              case (getBytes 16 imagedata) of
                                Just (line, rest) -> do dumpLine line
                                                        dumpImage rest (off + 16)
                                Nothing -> return ()
-                    
+
+-- Reads the palette bytes from the end of the file
 paletteData :: L.ByteString -> Maybe L.ByteString
 paletteData imdata = do (header, rest) <- getBytes (fromIntegral $ L.length imdata - 32) imdata
                         (result, tail) <- getBytes 30 rest
                         return result
 
+-- Creates a new Palette entry by shifting red, green and blue nibbles from the value provided
 genColour :: Integer -> Integer -> PaletteEntry
 genColour value index = PE ((value `shiftR` 8) * 16) (((value .&. 0xF0) `shiftR` 4) * 16) ((value .&. 0x0F) * 16) index
 
+-- Takes 30 bytes of palette data, treating each pair of bytes as a short, and generates 
+-- the corresponding palette of 15 colours
 parsePalette palElements = map (\(a,b) -> genColour b a) $ zip [1..15] cvalues
                            where odds = filter (odd . fst) $ map (\(a,b) -> (a, fromIntegral b)) tupList
                                  evens = filter (even . fst) $ map (\(a,b) -> (a, (fromIntegral b)*256)) tupList
@@ -136,11 +155,60 @@ parsePalette palElements = map (\(a,b) -> genColour b a) $ zip [1..15] cvalues
                                  tidy = map snd
                                  cvalues = zipWith (+) (tidy odds) (tidy evens)
 
+-- Takes the pixel data from four bitplanes to create a tile
+createGliph :: L.ByteString -> L.ByteString -> L.ByteString -> L.ByteString -> Maybe Gliph
+createGliph b8 b4 b2 b1 = do bytes <- expandByteStreams b8 b4 b2 b1
+                             return $ GL bytes
+
+-- Takes 4 8-bit words and makes 8 4-bit words
+expandByte :: W.Word8 -> W.Word8 -> W.Word8 -> W.Word8 -> L.ByteString
+expandByte b8 b4 b2 b1 = L.pack $ map pixelise [0..7]
+                         where pixelise i = (((b8 `shiftR` (7-i)) .&. 1) `shiftL` 3) .|. 
+                                            (((b4 `shiftR` (7-i)) .&. 1) `shiftL` 2) .|.
+                                            (((b2 `shiftR` (7-i)) .&. 1) `shiftL` 1) .|.
+                                            ((b1 `shiftR` (7-i) .&. 1))
+
+-- Combines the four incoming bitstreams to create a string of 4-bit words
+expandByteStreams :: L.ByteString -> L.ByteString -> L.ByteString -> L.ByteString -> Maybe L.ByteString
+expandByteStreams b8 b4 b2 b1 = do (byte8, b8rest) <- getByte b8
+                                   (byte4, b4rest) <- getByte b4
+                                   (byte2, b2rest) <- getByte b2
+                                   (byte1, b1rest) <- getByte b1
+                                   let thisByte = expandByte byte8 byte4 byte2 byte1
+                                   case (expandByteStreams b8rest b4rest b2rest b1rest) of
+                                      Just bs -> Just (thisByte `L.append` bs)
+                                      Nothing -> Just thisByte
+
+-- Takes a list of tuples of bytes from four bitplanes and returns a series of tiles
+blocksForBitplanes :: L.ByteString -> L.ByteString -> L.ByteString -> L.ByteString -> Maybe [Gliph]
+blocksForBitplanes b8 b4 b2 b1 = do (tb8, b8rest) <- getBytes TILE_BITPLANE_BYTES b8
+                                    (tb4, b4rest) <- getBytes TILE_BITPLANE_BYTES b4
+                                    (tb2, b2rest) <- getBytes TILE_BITPLANE_BYTES b2
+                                    (tb1, b1rest) <- getBytes TILE_BITPLANE_BYTES b1
+                                    gliphData <- createGliph tb8 tb4 tb2 tb1
+                                    case (blocksForBitplanes b8rest b4rest b2rest b1rest) of
+                                      Just x -> Just (gliphData : x)
+                                      Nothing -> Just [gliphData]
+
+-- Reads in the tile pixel data, turning 4 bitplanes of pixels into an array of tiles of 
+-- 4-bit mapped-palette values
+loadShapes :: L.ByteString -> Maybe [Gliph]
+loadShapes imdata = do (head, rest)      <- getBytes BITMAP_OFFSET_BYTES imdata
+                       (bitplane8, rest) <- getBytes bitplaneSeparationBytes rest
+                       (bitplane4, rest) <- getBytes bitplaneSeparationBytes rest
+                       (bitplane2, rest) <- getBytes bitplaneSeparationBytes rest
+                       (bitplane1, rest) <- getBytes bitplaneSeparationBytes rest
+                       blocksForBitplanes bitplane8 bitplane4 bitplane2 bitplane1
+                    where numshapes = ((L.length imdata) - BITMAP_OFFSET_BYTES - TILE_BITPLANE_BYTES) `quot` TILE_DATA_BYTES
+                          bitplaneSeparationBytes = fromIntegral $ numshapes * TILE_BITPLANE_BYTES
+
+-- Dumps a list of colours
 printPalette :: [PaletteEntry] -> IO()
 printPalette [] = return ()
 printPalette (x:xs) = do putStrLn $ show x
                          printPalette xs
 
+-- Dumps the palette corresponding to an unpacked image
 showPalette :: UnpackedImage -> IO ()
 showPalette image = do putStrLn $ "Data: " ++ (show $ L.length content)
                        case (paletteData content) of 
