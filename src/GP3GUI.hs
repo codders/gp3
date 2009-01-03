@@ -88,7 +88,7 @@ tileRectangle drawWin gc tiles tileSet tileMap (Rectangle x y w h) = do
              let curX = ix * tileSizePixels
              let curY = iy * tileSizePixels
              putStrLn $ "Draw tile X: "++show ix++" Y:"++show iy++" MapIndex: " ++ (show tileIndex) ++ " id: " ++ (show tileId)
-             drawPixbuf drawWin gc (tiles !! tileId) 0 0 curX curY tileSizePixels tileSizePixels RgbDitherNone 0 0
+             postGUIAsync $ drawPixbuf drawWin gc (tiles !! tileId) 0 0 curX curY tileSizePixels tileSizePixels RgbDitherNone 0 0
          return ()
          where tileSizePixels = BPCK.gliphSize tileSet
                tilesAcross = BPCK.tilesAcross tileMap
