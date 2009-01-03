@@ -1,5 +1,19 @@
 {-# LANGUAGE CPP #-}
-module BPackReader where
+module BPackReader 
+               (parseFile,
+                ParsedImage,
+                gliphs,
+                palette,
+                PaletteEntry,
+                Gliph,
+                gliphData,
+                gliphWidth,
+                gliphHeight,
+                gliphDepth,
+                red,
+                green,
+                blue)
+                where
 
 import Text.ParserCombinators.Parsec
 import qualified Data.ByteString.Lazy as L
@@ -15,8 +29,8 @@ import System.IO
 import Text.Printf
 
 #define BITMAP_OFFSET_BYTES 54
-#define TILE_DIMENSION_BITS 16
-#define TILE_BITPLANE_BYTES (TILE_DIMENSION_BITS * TILE_DIMENSION_BITS `div` 8)
+#define TILE_DIMENSION_PIXELS 16
+#define TILE_BITPLANE_BYTES (TILE_DIMENSION_PIXELS * TILE_DIMENSION_PIXELS `div` 8)
 #define BITPLANES 4
 #define TILE_DATA_BYTES (TILE_BITPLANE_BYTES * BITPLANES)
 
@@ -32,7 +46,10 @@ data UnpackedImage = UPI {
                          }
 
 data Gliph = GL {
-                  gliphData :: L.ByteString
+                  gliphData :: L.ByteString,
+                  gliphWidth :: Int,
+                  gliphHeight :: Int,
+                  gliphDepth :: Int
                 } deriving (Show)
 
 data PaletteEntry = PE {
@@ -41,6 +58,14 @@ data PaletteEntry = PE {
                          blue :: Integer,
                          index :: Integer
                        } deriving (Show)
+
+data ParsedImage = PI {
+                      gliphs :: [Gliph],
+                      palette :: [PaletteEntry]
+                   }
+
+instance Show ParsedImage where
+     show im = "Parsed Image has " ++ show (length $ gliphs im) ++ " shapes and " ++ show (length $ palette im) ++ " colours"
 
 instance Show BPackedImage where
      show im = "Packed image, compressed size: " ++ show (L.length $ imageData im) ++ " (decompressed: " ++ show (size im) ++ ") with markers " ++ show (bit8Marker im) ++ " and " ++ show (bit16Marker im)
@@ -94,7 +119,14 @@ unpackImage :: BPackedImage -> Maybe UnpackedImage
 unpackImage bpi = do decompressed <- decompressBytes (imageData bpi) (bit8Marker bpi) (bit16Marker bpi)
                      return $ UPI decompressed
 
-parseImage :: L.ByteString -> Maybe UnpackedImage
+buildParsedImage :: UnpackedImage -> Maybe ParsedImage
+buildParsedImage ui = do paletteBytes <- paletteData content
+                         let parsedPalette = parsePalette paletteBytes
+                         shapes <- loadShapes content
+                         return $ PI shapes parsedPalette
+                      where content = rawImageData ui
+
+parseImage :: L.ByteString -> Maybe ParsedImage
 parseImage fileData = do content <- matchHeader fileData
                          (bit8, content) <- getByte content
                          (bit16, content) <- getByte content
@@ -102,12 +134,13 @@ parseImage fileData = do content <- matchHeader fileData
                          (size_255, content) <- getByte content
                          (size, content) <- getByte content
                          unpacked <- unpackImage $ BPI bit8 bit16 ((fromIntegral size_255) * 255 + (fromIntegral size)) content
-                         return unpacked
+                         parsedImage <- buildParsedImage unpacked
+                         return parsedImage
 
-parseFile :: String -> IO (Maybe UnpackedImage)
+parseFile :: String -> IO (Maybe ParsedImage)
 parseFile fileName = do
         putStrLn $ "Loading from " ++ fileName
-        handle (\_ -> return Nothing) $
+        handle (\e -> do putStrLn $ "Error loading file: " ++ (show e); return Nothing) $
           bracket (openFile fileName ReadMode) hClose $ \h -> do
             fileData <- L.hGetContents h
             let image = parseImage fileData 
@@ -148,7 +181,8 @@ genColour value index = PE ((value `shiftR` 8) * 16) (((value .&. 0xF0) `shiftR`
 
 -- Takes 30 bytes of palette data, treating each pair of bytes as a short, and generates 
 -- the corresponding palette of 15 colours
-parsePalette palElements = map (\(a,b) -> genColour b a) $ zip [1..15] cvalues
+parsePalette :: L.ByteString -> [PaletteEntry]
+parsePalette palElements = (PE 0 0 0 0) : (map (\(a,b) -> genColour b a) $ zip [1..15] cvalues)
                            where odds = filter (odd . fst) $ map (\(a,b) -> (a, fromIntegral b)) tupList
                                  evens = filter (even . fst) $ map (\(a,b) -> (a, (fromIntegral b)*256)) tupList
                                  tupList = L.zip (L.pack [0..fromIntegral ((L.length palElements)-1)]) palElements
@@ -158,7 +192,7 @@ parsePalette palElements = map (\(a,b) -> genColour b a) $ zip [1..15] cvalues
 -- Takes the pixel data from four bitplanes to create a tile
 createGliph :: L.ByteString -> L.ByteString -> L.ByteString -> L.ByteString -> Maybe Gliph
 createGliph b8 b4 b2 b1 = do bytes <- expandByteStreams b8 b4 b2 b1
-                             return $ GL bytes
+                             return $ GL bytes TILE_DIMENSION_PIXELS TILE_DIMENSION_PIXELS BITPLANES
 
 -- Takes 4 8-bit words and makes 8 4-bit words
 expandByte :: W.Word8 -> W.Word8 -> W.Word8 -> W.Word8 -> L.ByteString
