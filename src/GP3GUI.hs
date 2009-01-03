@@ -68,29 +68,51 @@ main gladepath =
     c_gnome_init
     timeoutAddFull (yield >> return True) priorityDefaultIdle 100
     map <- BPCK.parseFile "Desert.bmap"
-    tiles <- tilesFromImageData $ fromJust map
-    gui <- loadGlade gladepath tiles 
+    let justMap = fromJust map
+    tiles <- tilesFromImageData justMap
+    gui <- loadGlade gladepath tiles justMap
     connectGui gui
     windowPresent (mainApp gui)
     mainGUI
 
-loadGlade :: String -> [Pixbuf] -> IO GUI
-loadGlade gladepath tiles = 
+tileRectangle :: DrawWindow -> GC -> [Pixbuf] -> BPCK.ParsedImage -> Rectangle -> IO ()
+tileRectangle drawWin gc tiles image (Rectangle x y w h) = do
+         --  drawPixbuf drawWin gc pb x y x y w h RgbDitherNone 0 0
+         putStrLn $ "Draw: " ++show x++","++show y++","++show w++","++show h
+         putStrLn $ "Tile: " ++show minX ++","++show minY++","++show maxX++","++show maxY
+         doFromTo minY maxY $ \iy ->
+           doFromTo minX maxX $ \ix -> do
+             let tileIndex = ix + (iy * tilesAcross)
+             let tileId = (min (fromIntegral (tileMap !! tileIndex)) tileCount) `mod` tileCount
+             let curX = ix * tileSizePixels
+             let curY = iy * tileSizePixels
+             putStrLn $ "Draw tile " ++ (show tileIndex) ++ " id: " ++ (show tileId)
+             drawPixbuf drawWin gc (tiles !! tileId) 0 0 curX curY tileSizePixels tileSizePixels RgbDitherNone 0 0
+         return ()
+         where tileSizePixels = BPCK.gliphSize image
+               tilesAcross = BPCK.tilesAcross image
+               tilesHigh = BPCK.tilesHigh image
+               tileMap = BPCK.tileMap image
+               tileCount = length tiles
+               minX = min (x `div` tileSizePixels) (tilesAcross - 1)
+               minY = min (y `div` tileSizePixels) (tilesHigh - 1)
+               maxX = min ((x+w) `div` tileSizePixels) (tilesAcross - 1)
+               maxY = min ((y+h) `div` tileSizePixels) (tilesHigh - 1)
+
+loadGlade :: String -> [Pixbuf] -> BPCK.ParsedImage -> IO GUI
+loadGlade gladepath tiles image = 
   do
     Just xml <- xmlNew gladepath
     app <- xmlGetWidget xml castToWindow "MainApp"
     canvas <- xmlGetWidget xml castToDrawingArea "GameCanvas"
     onExpose canvas (\(Expose {eventRegion = region}) -> do 
-                              let pb = tiles !! 40
                               drawWin <- widgetGetDrawWindow canvas
                               gc <- gcNew drawWin
-                              width <- pixbufGetWidth pb
-                              height <- pixbufGetHeight pb
-                              pbregion <- regionRectangle (Rectangle 0 0 width height)
-                              regionIntersect region pbregion
+                              (width, height) <- drawableGetSize drawWin
+                              dwRegion <- regionRectangle (Rectangle 0 0 width height)
+                              regionIntersect region dwRegion
                               rects <- regionGetRectangles region
-                              (flip mapM_) rects $ \(Rectangle x y w h) -> do
-                                drawPixbuf drawWin gc pb x y x y w h RgbDitherNone 0 0
+                              mapM_ (tileRectangle drawWin gc tiles image) rects
                               return True)
     return $ GUI app undefined
 

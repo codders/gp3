@@ -4,6 +4,10 @@ module BPackReader
                 ParsedImage,
                 gliphs,
                 palette,
+                tileMap,
+                tilesHigh,
+                tilesAcross,
+                gliphSize,
                 PaletteEntry,
                 Gliph,
                 gliphData,
@@ -29,10 +33,13 @@ import System.IO
 import Text.Printf
 
 #define BITMAP_OFFSET_BYTES 54
+#define TILEMAP_OFFSET_BYTES 130
 #define TILE_DIMENSION_PIXELS 16
 #define TILE_BITPLANE_BYTES (TILE_DIMENSION_PIXELS * TILE_DIMENSION_PIXELS `div` 8)
 #define BITPLANES 4
 #define TILE_DATA_BYTES (TILE_BITPLANE_BYTES * BITPLANES)
+#define IMAGE_HEIGHT_TILES 63
+#define IMAGE_WIDTH_TILES 21
 
 data BPackedImage = BPI { 
                           bit8Marker :: W.Word8,
@@ -61,7 +68,11 @@ data PaletteEntry = PE {
 
 data ParsedImage = PI {
                       gliphs :: [Gliph],
-                      palette :: [PaletteEntry]
+                      palette :: [PaletteEntry],
+                      tileMap :: [W.Word8],
+                      tilesAcross :: Int,
+                      tilesHigh :: Int,
+                      gliphSize :: Int
                    }
 
 instance Show ParsedImage where
@@ -123,7 +134,8 @@ buildParsedImage :: UnpackedImage -> Maybe ParsedImage
 buildParsedImage ui = do paletteBytes <- paletteData content
                          let parsedPalette = parsePalette paletteBytes
                          shapes <- loadShapes content
-                         return $ PI shapes parsedPalette
+                         tileMap <- loadTileMap content
+                         return $ PI shapes parsedPalette tileMap IMAGE_WIDTH_TILES IMAGE_HEIGHT_TILES TILE_DIMENSION_PIXELS
                       where content = rawImageData ui
 
 parseImage :: L.ByteString -> Maybe ParsedImage
@@ -249,3 +261,10 @@ showPalette image = do putStrLn $ "Data: " ++ (show $ L.length content)
                           Just palElements -> printPalette $ parsePalette palElements
                           Nothing -> putStrLn "Error getting palette"
                     where content = rawImageData image
+
+-- Reads the list of tiles from the image data
+loadTileMap :: L.ByteString -> Maybe [W.Word8]
+loadTileMap imdata = do (head, rest) <- getBytes TILEMAP_OFFSET_BYTES imdata
+                        (tilemap, rest) <- getBytes (IMAGE_WIDTH_TILES * IMAGE_HEIGHT_TILES) rest
+                        return $ L.unpack tilemap
+
