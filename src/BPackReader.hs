@@ -1,12 +1,10 @@
 {-# LANGUAGE CPP #-}
 module BPackReader 
-               (parseFile,
+               (parseImageFile,
+                parseMapFile,
                 ParsedImage,
                 gliphs,
                 palette,
-                tileMap,
-                tilesHigh,
-                tilesAcross,
                 gliphSize,
                 PaletteEntry,
                 Gliph,
@@ -16,7 +14,11 @@ module BPackReader
                 gliphDepth,
                 red,
                 green,
-                blue)
+                blue,
+                ParsedTileMap,
+                tileMap,
+                tilesHigh,
+                tilesAcross)
                 where
 
 import Text.ParserCombinators.Parsec
@@ -26,14 +28,19 @@ import qualified Data.ByteString.Internal as LI
 import qualified Data.Word as DW
 import Data.List
 import Data.Bits
+import Data.Maybe
 import qualified GHC.Word as W
 import Control.Exception (bracket, handle)
 import Control.Monad
 import System.IO
 import Text.Printf
+import Debug.Trace
 
+-- For Level Maps
+#define LEVELMAP_OFFSET_BYTES 130
+
+-- For Tile Sets
 #define BITMAP_OFFSET_BYTES 54
-#define TILEMAP_OFFSET_BYTES 130
 #define TILE_DIMENSION_PIXELS 16
 #define TILE_BITPLANE_BYTES (TILE_DIMENSION_PIXELS * TILE_DIMENSION_PIXELS `div` 8)
 #define BITPLANES 4
@@ -41,15 +48,15 @@ import Text.Printf
 #define IMAGE_HEIGHT_TILES 63
 #define IMAGE_WIDTH_TILES 21
 
-data BPackedImage = BPI { 
+data BPackedFile = BPF { 
                           bit8Marker :: W.Word8,
                           bit16Marker :: W.Word8,
                           size :: Integer,
-                          imageData :: L.ByteString
+                          fileData :: L.ByteString
                         }
 
-data UnpackedImage = UPI {
-                           rawImageData :: L.ByteString
+data UnpackedFile = UPF {
+                           rawFileData :: L.ByteString
                          }
 
 data Gliph = GL {
@@ -69,20 +76,26 @@ data PaletteEntry = PE {
 data ParsedImage = PI {
                       gliphs :: [Gliph],
                       palette :: [PaletteEntry],
-                      tileMap :: [W.Word8],
-                      tilesAcross :: Int,
-                      tilesHigh :: Int,
                       gliphSize :: Int
                    }
+
+data ParsedTileMap = PTM {
+                       tileMap :: [W.Word8],
+                       tilesAcross :: Int,
+                       tilesHigh :: Int
+                         }
+
+instance Show ParsedTileMap where
+     show tm = "Parsed Tile map has " ++ show (length $ tileMap tm) ++ " tiles in the map"
 
 instance Show ParsedImage where
      show im = "Parsed Image has " ++ show (length $ gliphs im) ++ " shapes and " ++ show (length $ palette im) ++ " colours"
 
-instance Show BPackedImage where
-     show im = "Packed image, compressed size: " ++ show (L.length $ imageData im) ++ " (decompressed: " ++ show (size im) ++ ") with markers " ++ show (bit8Marker im) ++ " and " ++ show (bit16Marker im)
+instance Show BPackedFile where
+     show im = "Packed image, compressed size: " ++ show (L.length $ fileData im) ++ " (decompressed: " ++ show (size im) ++ ") with markers " ++ show (bit8Marker im) ++ " and " ++ show (bit16Marker im)
 
-instance Show UnpackedImage where
-     show im = "Unpacked image, size: " ++ show (L.length $ rawImageData im)
+instance Show UnpackedFile where
+     show im = "Unpacked image, size: " ++ show (L.length $ rawFileData im)
 
 matchHeader :: L.ByteString -> Maybe L.ByteString
 matchHeader fileData = do (head, tail) <- getBytes 4 fileData
@@ -108,8 +121,8 @@ skipBytes n str = do if L.length prefix < count
                         (prefix, tail) = L.splitAt count str
 
 decompressBytes :: L.ByteString -> W.Word8 -> W.Word8 -> Maybe L.ByteString
-decompressBytes imageData bit8marker bit16marker = 
-             case L.uncons imageData of
+decompressBytes fileData bit8marker bit16marker = 
+             case L.uncons fileData of
                 Just (top, tail) -> 
                    if (top == bit8marker)
                      then do (n, rest) <- getByte tail
@@ -126,38 +139,63 @@ decompressBytes imageData bit8marker bit16marker =
                                     return $ L.cons top result
                 Nothing -> Just L.empty
 
-unpackImage :: BPackedImage -> Maybe UnpackedImage
-unpackImage bpi = do decompressed <- decompressBytes (imageData bpi) (bit8Marker bpi) (bit16Marker bpi)
-                     return $ UPI decompressed
+unpackAsFile :: BPackedFile -> Maybe UnpackedFile
+unpackAsFile bpi = do decompressed <- decompressBytes (fileData bpi) (bit8Marker bpi) (bit16Marker bpi)
+                      return $ UPF decompressed
 
-buildParsedImage :: UnpackedImage -> Maybe ParsedImage
+buildParsedImage :: UnpackedFile -> Maybe ParsedImage
 buildParsedImage ui = do paletteBytes <- paletteData content
                          let parsedPalette = parsePalette paletteBytes
                          shapes <- loadShapes content
-                         tileMap <- loadTileMap content
-                         return $ PI shapes parsedPalette tileMap IMAGE_WIDTH_TILES IMAGE_HEIGHT_TILES TILE_DIMENSION_PIXELS
-                      where content = rawImageData ui
+                         return $ PI shapes parsedPalette TILE_DIMENSION_PIXELS
+                      where content = rawFileData ui
 
-parseImage :: L.ByteString -> Maybe ParsedImage
-parseImage fileData = do content <- matchHeader fileData
+unpackData :: L.ByteString -> Maybe UnpackedFile
+unpackData fileData = do content <- matchHeader fileData
                          (bit8, content) <- getByte content
                          (bit16, content) <- getByte content
                          content <- skipBytes 4 content
                          (size_255, content) <- getByte content
                          (size, content) <- getByte content
-                         unpacked <- unpackImage $ BPI bit8 bit16 ((fromIntegral size_255) * 255 + (fromIntegral size)) content
-                         parsedImage <- buildParsedImage unpacked
-                         return parsedImage
+                         unpackAsFile $ BPF bit8 bit16 ((fromIntegral size_255) * 255 + (fromIntegral size)) content
 
-parseFile :: String -> IO (Maybe ParsedImage)
-parseFile fileName = do
+parseAsImage :: L.ByteString -> Maybe ParsedImage
+parseAsImage fileData = do unpacked <- unpackData fileData
+                           buildParsedImage unpacked
+
+parseAsTileMap :: L.ByteString -> Maybe ParsedTileMap
+parseAsTileMap fileData = do unpacked <- unpackData fileData
+                             tileArray <- loadTileMap $ rawFileData unpacked
+                             return $ PTM (trace (show tileArray) tileArray) IMAGE_WIDTH_TILES IMAGE_HEIGHT_TILES
+
+parseCompressedFile :: Show a => (L.ByteString -> Maybe a) -> String -> IO (Maybe a)
+parseCompressedFile parseFunction fileName = do
         putStrLn $ "Loading from " ++ fileName
         handle (\e -> do putStrLn $ "Error loading file: " ++ (show e); return Nothing) $
           bracket (openFile fileName ReadMode) hClose $ \h -> do
             fileData <- L.hGetContents h
-            let image = parseImage fileData 
-            case image of Just parsedImage -> putStrLn $ "Loaded image: " ++ (show parsedImage)
-            return image
+            let object = parseFunction fileData
+            case object of Just parsedObject -> putStrLn $ "Loaded: " ++ (show parsedObject)
+                           Nothing -> error "Unable to parse file"
+            return object
+
+
+parseImageFile :: String -> IO (Maybe ParsedImage)
+parseImageFile = parseCompressedFile parseAsImage
+
+parseMapFile :: String -> IO (Maybe ParsedTileMap)
+parseMapFile = parseCompressedFile parseAsTileMap
+
+dumpDecompressed :: String -> IO ()
+dumpDecompressed fileName = do
+        putStrLn $ "Loading from " ++ fileName
+        handle (\e -> do putStrLn $ "Error loading file: " ++ (show e); return ()) $
+          bracket (openFile fileName ReadMode) hClose $ \h -> do
+            fileData <- L.hGetContents h
+            let image = fromJust $ unpackData fileData
+            dumpImage (rawFileData image) 0
+            return ()
+
 
 -- Utility function for hexdumping
 asciiof :: W.Word8 -> String
@@ -255,16 +293,16 @@ printPalette (x:xs) = do putStrLn $ show x
                          printPalette xs
 
 -- Dumps the palette corresponding to an unpacked image
-showPalette :: UnpackedImage -> IO ()
+showPalette :: UnpackedFile -> IO ()
 showPalette image = do putStrLn $ "Data: " ++ (show $ L.length content)
                        case (paletteData content) of 
                           Just palElements -> printPalette $ parsePalette palElements
                           Nothing -> putStrLn "Error getting palette"
-                    where content = rawImageData image
+                    where content = rawFileData image
 
 -- Reads the list of tiles from the image data
 loadTileMap :: L.ByteString -> Maybe [W.Word8]
-loadTileMap imdata = do (head, rest) <- getBytes TILEMAP_OFFSET_BYTES imdata
+loadTileMap imdata = do (head, rest) <- getBytes LEVELMAP_OFFSET_BYTES (trace ("Imdata: " ++ show (L.length imdata)) imdata)
                         (tilemap, rest) <- getBytes (IMAGE_WIDTH_TILES * IMAGE_HEIGHT_TILES) rest
                         return $ L.unpack tilemap
 

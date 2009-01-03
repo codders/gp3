@@ -67,40 +67,40 @@ main gladepath =
     unsafeInitGUIForThreadedRTS
     c_gnome_init
     timeoutAddFull (yield >> return True) priorityDefaultIdle 100
-    map <- BPCK.parseFile "Desert.bmap"
-    let justMap = fromJust map
-    tiles <- tilesFromImageData justMap
-    gui <- loadGlade gladepath tiles justMap
+    tileSet <- BPCK.parseImageFile "Desert.bmap"
+    let justTileSet = fromJust tileSet
+    tileMap <- BPCK.parseMapFile "DEArid.GFB"
+    let justTileMap = fromJust tileMap
+    tiles <- tilesFromImageData justTileSet
+    gui <- loadGlade gladepath tiles justTileSet justTileMap
     connectGui gui
     windowPresent (mainApp gui)
     mainGUI
 
-tileRectangle :: DrawWindow -> GC -> [Pixbuf] -> BPCK.ParsedImage -> Rectangle -> IO ()
-tileRectangle drawWin gc tiles image (Rectangle x y w h) = do
-         --  drawPixbuf drawWin gc pb x y x y w h RgbDitherNone 0 0
+tileRectangle :: DrawWindow -> GC -> [Pixbuf] -> BPCK.ParsedImage -> BPCK.ParsedTileMap -> Rectangle -> IO ()
+tileRectangle drawWin gc tiles tileSet tileMap (Rectangle x y w h) = do
          putStrLn $ "Draw: " ++show x++","++show y++","++show w++","++show h
          putStrLn $ "Tile: " ++show minX ++","++show minY++","++show maxX++","++show maxY
          doFromTo minY maxY $ \iy ->
            doFromTo minX maxX $ \ix -> do
              let tileIndex = ix + (iy * tilesAcross)
-             let tileId = (min (fromIntegral (tileMap !! tileIndex)) tileCount) `mod` tileCount
+             let tileId = (min (fromIntegral (BPCK.tileMap tileMap !! tileIndex)) tileCount) `mod` tileCount
              let curX = ix * tileSizePixels
              let curY = iy * tileSizePixels
-             putStrLn $ "Draw tile " ++ (show tileIndex) ++ " id: " ++ (show tileId)
+             putStrLn $ "Draw tile X: "++show ix++" Y:"++show iy++" MapIndex: " ++ (show tileIndex) ++ " id: " ++ (show tileId)
              drawPixbuf drawWin gc (tiles !! tileId) 0 0 curX curY tileSizePixels tileSizePixels RgbDitherNone 0 0
          return ()
-         where tileSizePixels = BPCK.gliphSize image
-               tilesAcross = BPCK.tilesAcross image
-               tilesHigh = BPCK.tilesHigh image
-               tileMap = BPCK.tileMap image
+         where tileSizePixels = BPCK.gliphSize tileSet
+               tilesAcross = BPCK.tilesAcross tileMap
+               tilesHigh = BPCK.tilesHigh tileMap
                tileCount = length tiles
                minX = min (x `div` tileSizePixels) (tilesAcross - 1)
                minY = min (y `div` tileSizePixels) (tilesHigh - 1)
                maxX = min ((x+w) `div` tileSizePixels) (tilesAcross - 1)
                maxY = min ((y+h) `div` tileSizePixels) (tilesHigh - 1)
 
-loadGlade :: String -> [Pixbuf] -> BPCK.ParsedImage -> IO GUI
-loadGlade gladepath tiles image = 
+loadGlade :: String -> [Pixbuf] -> BPCK.ParsedImage -> BPCK.ParsedTileMap -> IO GUI
+loadGlade gladepath tiles tileSet tileMap = 
   do
     Just xml <- xmlNew gladepath
     app <- xmlGetWidget xml castToWindow "MainApp"
@@ -112,7 +112,7 @@ loadGlade gladepath tiles image =
                               dwRegion <- regionRectangle (Rectangle 0 0 width height)
                               regionIntersect region dwRegion
                               rects <- regionGetRectangles region
-                              mapM_ (tileRectangle drawWin gc tiles image) rects
+                              mapM_ (tileRectangle drawWin gc tiles tileSet tileMap) rects
                               return True)
     return $ GUI app undefined
 
