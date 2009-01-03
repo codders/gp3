@@ -12,6 +12,7 @@ module BPackReader
                 gliphWidth,
                 gliphHeight,
                 gliphDepth,
+                blankGliph,
                 red,
                 green,
                 blue,
@@ -243,6 +244,11 @@ parsePalette palElements = (PE 0 0 0 0) : (map (\(a,b) -> genColour b a) $ zip [
 createGliph :: L.ByteString -> L.ByteString -> L.ByteString -> L.ByteString -> Maybe Gliph
 createGliph b8 b4 b2 b1 = do bytes <- expandByteStreams b8 b4 b2 b1
                              return $ GL bytes TILE_DIMENSION_PIXELS TILE_DIMENSION_PIXELS BITPLANES
+
+-- Generates an empty Gliph
+blankGliph :: Gliph
+blankGliph = let bytecount = TILE_DIMENSION_PIXELS * TILE_DIMENSION_PIXELS
+             in GL (L.replicate bytecount 0) TILE_DIMENSION_PIXELS TILE_DIMENSION_PIXELS BITPLANES
 
 -- Takes 4 8-bit words and makes 8 4-bit words
 expandByte :: W.Word8 -> W.Word8 -> W.Word8 -> W.Word8 -> L.ByteString

@@ -59,7 +59,7 @@ buildTile palette g = do let gData = BPCK.gliphData g
                             gliphY = BPCK.gliphHeight g
 
 tilesFromImageData :: BPCK.ParsedImage -> IO [Pixbuf]
-tilesFromImageData im = sequence $ map (buildTile (BPCK.palette im)) (BPCK.gliphs im)
+tilesFromImageData im = sequence $ map (buildTile (BPCK.palette im)) (BPCK.blankGliph : BPCK.gliphs im)
 
 main :: FilePath -> IO ()
 main gladepath = 
