@@ -65,7 +65,7 @@ data Gliph = GL {
                   gliphWidth :: Int,
                   gliphHeight :: Int,
                   gliphDepth :: Int
-                } deriving (Show)
+                } 
 
 data PaletteEntry = PE {
                          red :: Integer,
@@ -86,11 +86,14 @@ data ParsedTileMap = PTM {
                        tilesHigh :: Int
                          }
 
+instance Show Gliph where
+     show g = "Gliph:\n"++(dumpImage (gliphData g) 0)
+
 instance Show ParsedTileMap where
      show tm = "Parsed Tile map has " ++ show (length $ tileMap tm) ++ " tiles in the map"
 
 instance Show ParsedImage where
-     show im = "Parsed Image has " ++ show (length $ gliphs im) ++ " shapes and " ++ show (length $ palette im) ++ " colours"
+     show im = "Parsed Image has " ++ show (length $ gliphs im) ++ " shapes and " ++ show (length $ palette im) ++ " colours.\n" ++ show (palette im)
 
 instance Show BPackedFile where
      show im = "Packed image, compressed size: " ++ show (L.length $ fileData im) ++ " (decompressed: " ++ show (size im) ++ ") with markers " ++ show (bit8Marker im) ++ " and " ++ show (bit16Marker im)
@@ -167,7 +170,7 @@ parseAsImage fileData = do unpacked <- unpackData fileData
 parseAsTileMap :: L.ByteString -> Maybe ParsedTileMap
 parseAsTileMap fileData = do unpacked <- unpackData fileData
                              tileArray <- loadTileMap $ rawFileData unpacked
-                             return $ PTM (trace (show tileArray) tileArray) IMAGE_WIDTH_TILES IMAGE_HEIGHT_TILES
+                             return $ PTM tileArray IMAGE_WIDTH_TILES IMAGE_HEIGHT_TILES
 
 parseCompressedFile :: Show a => (L.ByteString -> Maybe a) -> String -> IO (Maybe a)
 parseCompressedFile parseFunction fileName = do
@@ -194,7 +197,7 @@ dumpDecompressed fileName = do
           bracket (openFile fileName ReadMode) hClose $ \h -> do
             fileData <- L.hGetContents h
             let image = fromJust $ unpackData fileData
-            dumpImage (rawFileData image) 0
+            putStrLn $ dumpImage (rawFileData image) 0
             return ()
 
 
@@ -205,20 +208,19 @@ asciiof x = if (x > 20 && x < 127)
               else "."
 
 -- Generates the hex string corresponding to 16 bytes
-dumpLine :: L.ByteString -> IO ()
-dumpLine l = putStrLn $ dumpRest "" "" l
+dumpLine :: L.ByteString -> String
+dumpLine l = dumpRest "" "" l
              where dumpRest hex ascii l = 
                       case (L.uncons l) of
                          Just (head, tail) -> dumpRest (hex ++ (printf "%02X " head)) (ascii ++ (asciiof head)) tail
                          Nothing -> hex ++ ascii
 
 -- Hexdumps the image data
-dumpImage :: L.ByteString -> Int -> IO()
-dumpImage imagedata off = do putStr $ printf "%08X " off
-                             case (getBytes 16 imagedata) of
-                               Just (line, rest) -> do dumpLine line
-                                                       dumpImage rest (off + 16)
-                               Nothing -> return ()
+dumpImage :: L.ByteString -> Int -> String
+dumpImage imagedata off = printf "%08X " off ++ remainder
+                          where remainder = case (getBytes 16 imagedata) of
+                                               Just (line, rest) -> dumpLine line ++ "\n" ++ dumpImage rest (off + 16)
+                                               Nothing -> ""
 
 -- Reads the palette bytes from the end of the file
 paletteData :: L.ByteString -> Maybe L.ByteString
@@ -233,7 +235,7 @@ genColour value index = PE ((value `shiftR` 8) * 16) (((value .&. 0xF0) `shiftR`
 -- Takes 30 bytes of palette data, treating each pair of bytes as a short, and generates 
 -- the corresponding palette of 15 colours
 parsePalette :: L.ByteString -> [PaletteEntry]
-parsePalette palElements = (PE 0 0 0 0) : (map (\(a,b) -> genColour b a) $ zip [1..15] cvalues)
+parsePalette palElements = (map (\(a,b) -> genColour b a) $ zip [1..15] cvalues) ++ [PE 0 0 0 0]
                            where odds = filter (odd . fst) $ map (\(a,b) -> (a, fromIntegral b)) tupList
                                  evens = filter (even . fst) $ map (\(a,b) -> (a, (fromIntegral b)*256)) tupList
                                  tupList = L.zip (L.pack [0..fromIntegral ((L.length palElements)-1)]) palElements
@@ -264,7 +266,7 @@ expandByteStreams b8 b4 b2 b1 = do (byte8, b8rest) <- getByte b8
                                    (byte4, b4rest) <- getByte b4
                                    (byte2, b2rest) <- getByte b2
                                    (byte1, b1rest) <- getByte b1
-                                   let thisByte = expandByte byte8 byte4 byte2 byte1
+                                   let thisByte = expandByte byte1 byte2 byte4 byte8
                                    case (expandByteStreams b8rest b4rest b2rest b1rest) of
                                       Just bs -> Just (thisByte `L.append` bs)
                                       Nothing -> Just thisByte
@@ -308,7 +310,7 @@ showPalette image = do putStrLn $ "Data: " ++ (show $ L.length content)
 
 -- Reads the list of tiles from the image data
 loadTileMap :: L.ByteString -> Maybe [W.Word8]
-loadTileMap imdata = do (head, rest) <- getBytes LEVELMAP_OFFSET_BYTES (trace ("Imdata: " ++ show (L.length imdata)) imdata)
+loadTileMap imdata = do (head, rest) <- getBytes LEVELMAP_OFFSET_BYTES imdata
                         (tilemap, rest) <- getBytes (IMAGE_WIDTH_TILES * IMAGE_HEIGHT_TILES) rest
                         return $ L.unpack tilemap
 

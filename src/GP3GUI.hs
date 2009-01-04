@@ -10,8 +10,8 @@ import Graphics.UI.Gtk.Gdk.Pixbuf
 import Control.Concurrent
 import Data.Maybe
 import Data.Array.MArray
+import Data.Word
 import qualified Data.ByteString.Lazy as B
-import Foreign
 
 import qualified BPackReader as BPCK
 
@@ -67,9 +67,9 @@ main gladepath =
     unsafeInitGUIForThreadedRTS
     c_gnome_init
     timeoutAddFull (yield >> return True) priorityDefaultIdle 100
-    tileSet <- BPCK.parseImageFile "Desert.bmap"
+    tileSet <- BPCK.parseImageFile "gfx/Desert.bmap"
     let justTileSet = fromJust tileSet
-    tileMap <- BPCK.parseMapFile "DEArid.GFB"
+    tileMap <- BPCK.parseMapFile "levels/DESandStorm.GFB"
     let justTileMap = fromJust tileMap
     tiles <- tilesFromImageData justTileSet
     gui <- loadGlade gladepath tiles justTileSet justTileMap
@@ -80,14 +80,14 @@ main gladepath =
 tileRectangle :: DrawWindow -> GC -> [Pixbuf] -> BPCK.ParsedImage -> BPCK.ParsedTileMap -> Rectangle -> IO ()
 tileRectangle drawWin gc tiles tileSet tileMap (Rectangle x y w h) = do
          putStrLn $ "Draw: " ++show x++","++show y++","++show w++","++show h
-         putStrLn $ "Tile: " ++show minX ++","++show minY++","++show maxX++","++show maxY
+         --putStrLn $ "Tile: " ++show minX ++","++show minY++","++show maxX++","++show maxY
          doFromTo minY maxY $ \iy ->
            doFromTo minX maxX $ \ix -> do
              let tileIndex = ix + (iy * tilesAcross)
              let tileId = (min (fromIntegral (BPCK.tileMap tileMap !! tileIndex)) tileCount) `mod` tileCount
              let curX = ix * tileSizePixels
              let curY = iy * tileSizePixels
-             putStrLn $ "Draw tile X: "++show ix++" Y:"++show iy++" MapIndex: " ++ (show tileIndex) ++ " id: " ++ (show tileId)
+             --putStrLn $ "Draw tile X: "++show ix++" Y:"++show iy++" MapIndex: " ++ (show tileIndex) ++ " id: " ++ (show tileId)
              postGUIAsync $ drawPixbuf drawWin gc (tiles !! tileId) 0 0 curX curY tileSizePixels tileSizePixels RgbDitherNone 0 0
          return ()
          where tileSizePixels = BPCK.gliphSize tileSet
