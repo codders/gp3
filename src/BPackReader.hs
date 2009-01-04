@@ -96,7 +96,7 @@ instance Show ParsedTileMap where
      show tm = "Parsed Tile map has " ++ show (length $ tileMap tm) ++ " tiles in the map"
 
 instance Show ParsedImage where
-     show im = "Parsed Image has " ++ show (length $ gliphs im) ++ " shapes and " ++ show (length $ palette im) ++ " colours.\n" ++ show (palette im)
+     show im = "Parsed Image has " ++ show (length $ gliphs im) ++ " shapes and " ++ show (length $ palette im) ++ " colours."
 
 instance Show BPackedFile where
      show im = "Packed image, compressed size: " ++ show (L.length $ fileData im) ++ " (decompressed: " ++ show (size im) ++ ") with markers " ++ show (bit8Marker im) ++ " and " ++ show (bit16Marker im)
