@@ -43,13 +43,11 @@ buildTile palette g = do let gData = BPCK.gliphData g
                          rowStride <- pixbufGetRowstride buf
                          chan <- pixbufGetNChannels buf -- Hopefully this is 3 (R,G,B)
                          bits <- pixbufGetBitsPerSample buf -- Hopefully this is 8
-                         --putStrLn ("Row Bytestride: " ++ show rowStride ++ ", CPP: " ++ show chan ++ ", BPS: " ++ show bits)
                          doFromTo 0 (gliphX - 1) $ \y ->
                            doFromTo 0 (gliphY - 1) $ \x -> do
                                let pixbufoffset = x*chan + y*rowStride
                                let gliphOffset = fromIntegral $ x + y*gliphX
                                let paletteIndex = B.index gData gliphOffset
-                               --putStrLn $ "Palette: " ++ (show $ length palette) ++ ", Colour: " ++ (show paletteIndex)
                                let thiscolor = palette !! fromIntegral paletteIndex
                                writeArray pbData (pixbufoffset) (fromIntegral $ BPCK.red thiscolor)
                                writeArray pbData (1 + pixbufoffset) (fromIntegral $ BPCK.green thiscolor)
@@ -58,8 +56,33 @@ buildTile palette g = do let gData = BPCK.gliphData g
                       where gliphX = BPCK.gliphWidth g
                             gliphY = BPCK.gliphHeight g
 
+-- Turns the array of gliphs from the parsed image into an array of Pixbufs ready
+-- to be pasted on to the map
 tilesFromImageData :: BPCK.ParsedImage -> IO [Pixbuf]
 tilesFromImageData im = sequence $ map (buildTile (BPCK.palette im)) (BPCK.blankGliph : BPCK.gliphs im)
+
+-- Create a pixmap using the tileset and the pixmaps
+createTiledPixmap :: BPCK.ParsedImage -> BPCK.ParsedTileMap -> IO Pixmap
+createTiledPixmap tileSet tileMap = do
+              putStrLn $ "Building tile pixmaps"
+              tiles <- tilesFromImageData tileSet
+              let tileCount = length tiles
+              putStrLn $ "Creating new pixmap " ++ show totalWidthPixels ++ " x " ++ show totalHeightPixels
+              pixmap <- pixmapNew (Nothing :: Maybe DrawWindow) totalWidthPixels totalHeightPixels (Just 24)
+              gc <- gcNew pixmap
+              doFromTo 0 (tilesHigh - 1) $ \iy ->
+                doFromTo 0 (tilesAcross - 1) $ \ix -> do
+                  let tileIndex = ix + (iy * tilesAcross)
+                  let tileId = (min (fromIntegral (BPCK.tileMap tileMap !! tileIndex)) tileCount) `mod` tileCount
+                  let curX = ix * tileSizePixels
+                  let curY = iy * tileSizePixels
+                  postGUIAsync $ drawPixbuf pixmap gc (tiles !! tileId) 0 0 curX curY tileSizePixels tileSizePixels RgbDitherNone 0 0
+              return pixmap
+              where tileSizePixels = BPCK.gliphSize tileSet
+                    tilesAcross = BPCK.tilesAcross tileMap
+                    tilesHigh = BPCK.tilesHigh tileMap
+                    totalWidthPixels = tileSizePixels * tilesAcross
+                    totalHeightPixels = tileSizePixels * tilesHigh
 
 main :: FilePath -> IO ()
 main gladepath = 
@@ -71,40 +94,18 @@ main gladepath =
     let justTileSet = fromJust tileSet
     tileMap <- BPCK.parseMapFile "levels/MEMechanoid.GFB"
     let justTileMap = fromJust tileMap
-    tiles <- tilesFromImageData justTileSet
-    gui <- loadGlade gladepath tiles justTileSet justTileMap
+    gui <- loadGlade gladepath justTileSet justTileMap
     connectGui gui
     windowPresent (mainApp gui)
     mainGUI
 
-tileRectangle :: DrawWindow -> GC -> [Pixbuf] -> BPCK.ParsedImage -> BPCK.ParsedTileMap -> Rectangle -> IO ()
-tileRectangle drawWin gc tiles tileSet tileMap (Rectangle x y w h) = do
-         putStrLn $ "Draw: " ++show x++","++show y++","++show w++","++show h
-         --putStrLn $ "Tile: " ++show minX ++","++show minY++","++show maxX++","++show maxY
-         doFromTo minY maxY $ \iy ->
-           doFromTo minX maxX $ \ix -> do
-             let tileIndex = ix + (iy * tilesAcross)
-             let tileId = (min (fromIntegral (BPCK.tileMap tileMap !! tileIndex)) tileCount) `mod` tileCount
-             let curX = ix * tileSizePixels
-             let curY = iy * tileSizePixels
-             --putStrLn $ "Draw tile X: "++show ix++" Y:"++show iy++" MapIndex: " ++ (show tileIndex) ++ " id: " ++ (show tileId)
-             postGUIAsync $ drawPixbuf drawWin gc (tiles !! tileId) 0 0 curX curY tileSizePixels tileSizePixels RgbDitherNone 0 0
-         return ()
-         where tileSizePixels = BPCK.gliphSize tileSet
-               tilesAcross = BPCK.tilesAcross tileMap
-               tilesHigh = BPCK.tilesHigh tileMap
-               tileCount = length tiles
-               minX = min (x `div` tileSizePixels) (tilesAcross - 1)
-               minY = min (y `div` tileSizePixels) (tilesHigh - 1)
-               maxX = min ((x+w) `div` tileSizePixels) (tilesAcross - 1)
-               maxY = min ((y+h) `div` tileSizePixels) (tilesHigh - 1)
-
-loadGlade :: String -> [Pixbuf] -> BPCK.ParsedImage -> BPCK.ParsedTileMap -> IO GUI
-loadGlade gladepath tiles tileSet tileMap = 
+loadGlade :: String -> BPCK.ParsedImage -> BPCK.ParsedTileMap -> IO GUI
+loadGlade gladepath tileSet tileMap = 
   do
     Just xml <- xmlNew gladepath
     app <- xmlGetWidget xml castToWindow "MainApp"
     canvas <- xmlGetWidget xml castToDrawingArea "GameCanvas"
+    tiledPixmap <- createTiledPixmap tileSet tileMap
     onExpose canvas (\(Expose {eventRegion = region}) -> do 
                               drawWin <- widgetGetDrawWindow canvas
                               gc <- gcNew drawWin
@@ -112,7 +113,7 @@ loadGlade gladepath tiles tileSet tileMap =
                               dwRegion <- regionRectangle (Rectangle 0 0 width height)
                               regionIntersect region dwRegion
                               rects <- regionGetRectangles region
-                              mapM_ (tileRectangle drawWin gc tiles tileSet tileMap) rects
+                              (flip mapM_) rects (\(Rectangle x y w h) -> postGUIAsync $ drawDrawable drawWin gc tiledPixmap x y x y w h)
                               return True)
     return $ GUI app undefined
 
