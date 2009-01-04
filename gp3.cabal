@@ -17,5 +17,5 @@ Executable gp3
     GHC-Options: -Wall
     C-Sources: src/gtk_docker.c
     Includes: src/gtk_docker.h
-    Build-Depends: base, glib, glade, gtk, filepath, unix
+    Build-Depends: base, glib, glade, gtk, filepath, unix, missingh
 

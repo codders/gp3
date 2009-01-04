@@ -11,6 +11,11 @@ import Control.Concurrent
 import Data.Maybe
 import Data.Array.MArray
 import Data.Word
+import Data.IORef
+import Data.Char
+import Data.String.Utils
+import System.Directory
+import Debug.Trace
 import qualified Data.ByteString.Lazy as B
 
 import qualified BPackReader as BPCK
@@ -18,9 +23,24 @@ import qualified BPackReader as BPCK
 foreign import ccall unsafe "gtk_docker.h do_gnome_init"
       c_gnome_init :: IO ()
 
+#define LEVELS_FOLDER     "levels"
+#define TILESETS_FOLDER   "gfx"
+#define LEVEL_SUFFIX      ".gfb"
+#define TILESET_SUFFIX     ".bmap"
+
 data GUI = GUI {
     mainApp :: Window,
     canvas :: DrawingArea
+  }
+
+data MapInfo = MI {
+    tileSetFile :: String,
+    mapFile :: String
+  } deriving (Show)
+
+data MapState = MS {
+    mapList :: [MapInfo],
+    renderedMap :: Pixmap
   }
 
 {-# INLINE doFromTo #-}
@@ -84,28 +104,79 @@ createTiledPixmap tileSet tileMap = do
                     totalWidthPixels = tileSizePixels * tilesAcross
                     totalHeightPixels = tileSizePixels * tilesHigh
 
+hasSuffix :: String -> String -> Bool
+hasSuffix suffix = \s -> endswith suffix (map toLower s)
+
+hasPrefix :: String -> String -> Bool
+hasPrefix prefix = \s -> startswith prefix (map toLower s)
+
+-- Gets a list of the tile sets from disk
+getTileSets :: IO [String]
+getTileSets = do 
+           files <- getDirectoryContents TILESETS_FOLDER
+           return $ filter (hasSuffix TILESET_SUFFIX) files
+
+-- Creates MapInfos by matching maps with TileSets
+matchUpFiles :: [String] -> [String] -> [MapInfo]
+matchUpFiles mapFiles tileSets = catMaybes $ map mapToMapInfo mapFiles
+           where mapToMapInfo file = case matchTileSet file of
+                                       Just mapName -> Just $ MI (TILESETS_FOLDER ++ "/" ++ mapName) (LEVELS_FOLDER ++ "/" ++ file)
+                                       Nothing -> Nothing
+                 matchTileSet file = case filter (hasPrefix (map toLower (take 2 file))) tileSets of
+                                       (res:_) -> Just res
+                                       _       -> Nothing
+
+-- Gets a list of Maps / Levels from disk
+getMaps :: IO [MapInfo]
+getMaps = do
+     mapFiles <- getDirectoryContents LEVELS_FOLDER
+     tileSets <- getTileSets
+     return $ matchUpFiles (filter (hasSuffix LEVEL_SUFFIX) mapFiles) tileSets
+
+-- Loads a Pixmap from a MapInfo
+loadPixmap :: MapInfo -> IO (Pixmap)
+loadPixmap info = do
+    tileSet <- BPCK.parseImageFile (tileSetFile info)
+    let justTileSet = fromJust tileSet
+    tileMap <- BPCK.parseMapFile (mapFile info)
+    let justTileMap = fromJust tileMap
+    tiledPixmap <- createTiledPixmap justTileSet justTileMap
+    return tiledPixmap
+
+-- Creates a fresh blank MapState
+newMapState :: IO (MapState)
+newMapState = do
+    allMaps <- getMaps
+    thisMap <- loadPixmap $ head allMaps    
+    return $ MS allMaps thisMap
+
+-- Advances MapState to the next map
+nextMapState :: MapState -> IO (MapState)
+nextMapState state = do
+    let newMapList = (tail oldMapList) ++ [head oldMapList]
+    thisMap <- loadPixmap $ head newMapList
+    return $ MS newMapList thisMap
+    where oldMapList = mapList state
+
 main :: FilePath -> IO ()
 main gladepath = 
   do
     unsafeInitGUIForThreadedRTS
     c_gnome_init
     timeoutAddFull (yield >> return True) priorityDefaultIdle 100
-    tileSet <- BPCK.parseImageFile "gfx/Metallic.bmap"
-    let justTileSet = fromJust tileSet
-    tileMap <- BPCK.parseMapFile "levels/MEMechanoid.GFB"
-    let justTileMap = fromJust tileMap
-    gui <- loadGlade gladepath justTileSet justTileMap
+    mapState <- newMapState
+    mapStateRef <- newIORef mapState
+    gui <- loadGlade gladepath mapStateRef
     connectGui gui
     windowPresent (mainApp gui)
     mainGUI
 
-loadGlade :: String -> BPCK.ParsedImage -> BPCK.ParsedTileMap -> IO GUI
-loadGlade gladepath tileSet tileMap = 
+loadGlade :: String -> IORef (MapState) -> IO GUI
+loadGlade gladepath mapStateRef = 
   do
     Just xml <- xmlNew gladepath
     app <- xmlGetWidget xml castToWindow "MainApp"
     canvas <- xmlGetWidget xml castToDrawingArea "GameCanvas"
-    tiledPixmap <- createTiledPixmap tileSet tileMap
     onExpose canvas (\(Expose {eventRegion = region}) -> do 
                               drawWin <- widgetGetDrawWindow canvas
                               gc <- gcNew drawWin
@@ -113,8 +184,24 @@ loadGlade gladepath tileSet tileMap =
                               dwRegion <- regionRectangle (Rectangle 0 0 width height)
                               regionIntersect region dwRegion
                               rects <- regionGetRectangles region
-                              (flip mapM_) rects (\(Rectangle x y w h) -> postGUIAsync $ drawDrawable drawWin gc tiledPixmap x y x y w h)
+                              mapState <- readIORef mapStateRef
+                              (flip mapM_) rects (\(Rectangle x y w h) -> postGUIAsync $ drawDrawable drawWin gc (renderedMap mapState) x y x y w h)
                               return True)
+    onKeyPress app (\x@(Key { eventKeyName = name,
+                              eventKeyChar = char }) -> do 
+                              case char of
+                                 Just ' ' -> do 
+                                      putStrLn $ "Switching map"
+                                      currentState <- readIORef mapStateRef
+                                      nextState <- nextMapState currentState
+                                      writeIORef mapStateRef nextState
+                                      drawWin <- widgetGetDrawWindow canvas
+                                      gc <- gcNew drawWin
+                                      (width, height) <- drawableGetSize drawWin
+                                      postGUIAsync $ drawDrawable drawWin gc (renderedMap nextState) 0 0 0 0 width height
+                                 Just c  -> putStrLn $ "Press " ++ name ++ "('" ++ [c] ++ "')"
+                                 Nothing -> putStrLn $ "weird key: " ++ name
+                              return (eventSent x))
     return $ GUI app undefined
 
 connectGui gui = 
