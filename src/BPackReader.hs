@@ -56,6 +56,9 @@ data BPackedFile = BPF {
                           fileData :: L.ByteString
                         }
 
+data FileType = CompressedFile
+              | UncompressedFile
+
 data UnpackedFile = UPF {
                            rawFileData :: L.ByteString
                          }
@@ -147,12 +150,13 @@ unpackAsFile :: BPackedFile -> Maybe UnpackedFile
 unpackAsFile bpi = do decompressed <- decompressBytes (fileData bpi) (bit8Marker bpi) (bit16Marker bpi)
                       return $ UPF decompressed
 
-buildParsedImage :: UnpackedFile -> Maybe ParsedImage
-buildParsedImage ui = do paletteBytes <- paletteData content
-                         let parsedPalette = parsePalette paletteBytes
-                         shapes <- loadShapes content
-                         return $ PI shapes parsedPalette TILE_DIMENSION_PIXELS
-                      where content = rawFileData ui
+buildParsedImage :: L.ByteString -> FileType -> Maybe ParsedImage
+buildParsedImage content filetype = do 
+                              paletteBytes <- paletteData content
+                              let parsedPalette = parsePalette paletteBytes
+                              shapes <- case filetype of CompressedFile -> loadCompressedShapes content
+                                                         UncompressedFile -> loadUncompressedShapes content
+                              return $ PI shapes parsedPalette TILE_DIMENSION_PIXELS
 
 unpackData :: L.ByteString -> Maybe UnpackedFile
 unpackData fileData = do content <- matchHeader fileData
@@ -163,29 +167,27 @@ unpackData fileData = do content <- matchHeader fileData
                          (size, content) <- getByte content
                          unpackAsFile $ BPF bit8 bit16 ((fromIntegral size_255) * 255 + (fromIntegral size)) content
 
-parseAsImage :: L.ByteString -> Maybe ParsedImage
-parseAsImage fileData = do unpacked <- unpackData fileData
-                           buildParsedImage unpacked
-
-parseAsTileMap :: L.ByteString -> Maybe ParsedTileMap
-parseAsTileMap fileData = do unpacked <- unpackData fileData
-                             tileArray <- loadTileMap $ rawFileData unpacked
+parseAsTileMap :: L.ByteString -> FileType -> Maybe ParsedTileMap
+parseAsTileMap fileData filetype = do 
+                             tileArray <- loadTileMap fileData
                              return $ PTM tileArray IMAGE_WIDTH_TILES IMAGE_HEIGHT_TILES
 
-parseCompressedFile :: Show a => (L.ByteString -> Maybe a) -> String -> IO (Maybe a)
+parseCompressedFile :: Show a => (L.ByteString -> FileType -> Maybe a) -> String -> IO (Maybe a)
 parseCompressedFile parseFunction fileName = do
         putStrLn $ "Loading from " ++ fileName
         handle (\e -> do putStrLn $ "Error loading file: " ++ (show e); return Nothing) $
           bracket (openFile fileName ReadMode) hClose $ \h -> do
             fileData <- L.hGetContents h
-            let object = parseFunction fileData
+            let unpacked = unpackData fileData
+            let object = case unpacked of Just unpackedFileData -> parseFunction (rawFileData unpackedFileData) CompressedFile
+                                          Nothing -> parseFunction fileData UncompressedFile 
             case object of Just parsedObject -> putStrLn $ "Loaded: " ++ (show parsedObject)
                            Nothing -> error "Unable to parse file"
             return object
 
 
 parseImageFile :: String -> IO (Maybe ParsedImage)
-parseImageFile = parseCompressedFile parseAsImage
+parseImageFile = parseCompressedFile buildParsedImage
 
 parseMapFile :: String -> IO (Maybe ParsedTileMap)
 parseMapFile = parseCompressedFile parseAsTileMap
@@ -271,6 +273,26 @@ expandByteStreams b8 b4 b2 b1 = do (byte8, b8rest) <- getByte b8
                                       Just bs -> Just (thisByte `L.append` bs)
                                       Nothing -> Just thisByte
 
+-- Gets the number of shapes in an image data block
+numberOfShapes :: L.ByteString -> Int
+numberOfShapes imdata = fromIntegral $ ((L.length imdata) - BITMAP_OFFSET_BYTES - TILE_BITPLANE_BYTES) `quot` TILE_DATA_BYTES
+
+-- In an uncompressed gliph stream, the bitplanes are interleaved pairs of bytes
+readGliphStream :: L.ByteString -> Maybe [Gliph]
+readGliphStream stream = blocksForBitplanes (pairs 0 sEights) (pairs 1 sEights) (pairs 2 sEights) (pairs 3 sEights)
+                         where sEights = eights stream
+                               eights astream | L.length astream > 8 = let (head, tail) = L.splitAt 8 astream
+                                                                       in (L.unpack head) : eights tail
+                                              | otherwise            = [L.unpack astream]
+                               pairs n (h:t) = (L.pack $ take 2 (drop (2*n) h)) `L.append` (pairs n t)
+                               pairs _ []    = L.empty
+
+-- Skip the head then parse the remaining bytes
+loadUncompressedShapes :: L.ByteString -> Maybe [Gliph]
+loadUncompressedShapes imdata = do
+                         (head, rest) <- getBytes BITMAP_OFFSET_BYTES imdata
+                         readGliphStream rest
+
 -- Takes a list of tuples of bytes from four bitplanes and returns a series of tiles
 blocksForBitplanes :: L.ByteString -> L.ByteString -> L.ByteString -> L.ByteString -> Maybe [Gliph]
 blocksForBitplanes b8 b4 b2 b1 = do (tb8, b8rest) <- getBytes TILE_BITPLANE_BYTES b8
@@ -284,15 +306,15 @@ blocksForBitplanes b8 b4 b2 b1 = do (tb8, b8rest) <- getBytes TILE_BITPLANE_BYTE
 
 -- Reads in the tile pixel data, turning 4 bitplanes of pixels into an array of tiles of 
 -- 4-bit mapped-palette values
-loadShapes :: L.ByteString -> Maybe [Gliph]
-loadShapes imdata = do (head, rest)      <- getBytes BITMAP_OFFSET_BYTES imdata
+loadCompressedShapes :: L.ByteString -> Maybe [Gliph]
+loadCompressedShapes imdata = do 
+                       (head, rest)      <- getBytes BITMAP_OFFSET_BYTES imdata
                        (bitplane8, rest) <- getBytes bitplaneSeparationBytes rest
                        (bitplane4, rest) <- getBytes bitplaneSeparationBytes rest
                        (bitplane2, rest) <- getBytes bitplaneSeparationBytes rest
                        (bitplane1, rest) <- getBytes bitplaneSeparationBytes rest
                        blocksForBitplanes bitplane8 bitplane4 bitplane2 bitplane1
-                    where numshapes = ((L.length imdata) - BITMAP_OFFSET_BYTES - TILE_BITPLANE_BYTES) `quot` TILE_DATA_BYTES
-                          bitplaneSeparationBytes = fromIntegral $ numshapes * TILE_BITPLANE_BYTES
+                    where bitplaneSeparationBytes = (numberOfShapes imdata) * TILE_BITPLANE_BYTES
 
 -- Dumps a list of colours
 printPalette :: [PaletteEntry] -> IO()

@@ -67,9 +67,9 @@ main gladepath =
     unsafeInitGUIForThreadedRTS
     c_gnome_init
     timeoutAddFull (yield >> return True) priorityDefaultIdle 100
-    tileSet <- BPCK.parseImageFile "gfx/Desert.bmap"
+    tileSet <- BPCK.parseImageFile "gfx/Metallic.bmap"
     let justTileSet = fromJust tileSet
-    tileMap <- BPCK.parseMapFile "levels/DESandStorm.GFB"
+    tileMap <- BPCK.parseMapFile "levels/MEMechanoid.GFB"
     let justTileMap = fromJust tileMap
     tiles <- tilesFromImageData justTileSet
     gui <- loadGlade gladepath tiles justTileSet justTileMap
