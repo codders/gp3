@@ -150,8 +150,8 @@
         </child>
         <child>
           <widget class="GtkDrawingArea" id="GameCanvas">
-            <property name="width_request">320</property>
-            <property name="height_request">240</property>
+            <property name="width_request">336</property>
+            <property name="height_request">600</property>
             <property name="visible">True</property>
           </widget>
         </child>
